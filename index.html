@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#181724">
+<title>Gallego Run</title>
+<style>
+  :root { color-scheme: dark; font-family: ui-monospace, "Courier New", monospace; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 18px; color: #fff4d8; background: radial-gradient(ellipse at 50% 20%, #41475a, #1a1928 65%); }
+  main { width: min(100%, 1024px); }
+  header { display: flex; justify-content: space-between; align-items: end; gap: 12px; margin: 0 0 12px; }
+  h1 { margin: 0; color: #fff4d8; font-size: clamp(24px, 5vw, 42px); letter-spacing: -2px; text-shadow: 3px 3px #be4d50; }
+  .tag { margin: 6px 0 0; color: #e6bc8e; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+  .record { color: #e9c68e; text-align: right; font-size: 12px; line-height: 1.5; white-space: nowrap; }
+  .frame { position: relative; border: 5px solid #f1c99a; border-radius: 6px; box-shadow: 0 8px 0 #846056, 0 18px 50px #0008; overflow: hidden; background: #e7ae78; touch-action: manipulation; }
+  canvas { display: block; width: 100%; aspect-ratio: 960 / 480; image-rendering: pixelated; }
+  .overlay { position: absolute; inset: 0; display: grid; place-items: center; padding: 12px; background: #20192b85; text-align: center; }
+  .overlay[hidden] { display: none; }
+  .panel { width: min(90%, 450px); max-height: 100%; overflow: auto; padding: clamp(12px, 3vw, 28px); border: 4px solid #ffe6b1; background: #262333ef; box-shadow: 6px 6px #6b4050; }
+  .eyebrow { color: #ffd17d; font-size: 11px; letter-spacing: .16em; margin: 0 0 8px; }
+  .panel h2 { margin: 0 0 10px; font-size: clamp(20px, 4vw, 32px); line-height: 1.1; color: #fff5d6; }
+  .panel p { margin: 9px 0; color: #e1d2c8; font-size: clamp(11px, 1.5vw, 14px); line-height: 1.5; }
+  button { font: inherit; cursor: pointer; }
+  .primary { margin-top: 12px; padding: 12px 24px; border: 0; background: #ffce72; color: #332434; font-weight: 900; box-shadow: 0 4px #b96f50; }
+  .primary:active { transform: translateY(3px); box-shadow: 0 1px #b96f50; }
+  .controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 18px; }
+  .hint { margin: 0; color: #d3b9ab; font-size: 12px; line-height: 1.5; }
+  .jump { min-width: 130px; padding: 12px 20px; border: 2px solid #ffdcaa; color: #fff4d8; background: #a44c5a; font-weight: bold; box-shadow: 0 4px #673645; touch-action: manipulation; }
+  .jump:active { transform: translateY(3px); box-shadow: 0 1px #673645; }
+  .foot { color: #ab9da1; font-size: 11px; margin: 16px 0 0; }
+  @media (max-width: 560px) {
+    body { padding: 10px; }
+    .frame { border-width: 3px; }
+    .tag, .record { font-size: 10px; }
+    .panel { padding: 10px; }
+    .panel p { margin: 4px 0; }
+    .primary { margin-top: 5px; padding: 8px 16px; }
+    .controls { margin-top: 12px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div><h1>GALLEGO RUN</h1><p class="tag">Sol, saltos y ron con cola</p></div>
+    <div class="record">RÉCORD<br><strong id="best">00000</strong></div>
+  </header>
+  <div class="frame" id="frame">
+    <canvas id="game" width="960" height="480" aria-label="Juego Gallego Run. Salta para esquivar obstáculos y recoger bebidas y cristales."></canvas>
+    <div class="overlay" id="overlay">
+      <div class="panel">
+        <p class="eyebrow" id="eyebrow">UNA AVENTURA BAJO EL SOL</p>
+        <h2 id="title">¡A CORRER!</h2>
+        <p id="description">Esquiva las rocas, recoge ron con cola y aguanta todo lo que puedas.</p>
+        <p id="details">El cristal te hace invencible y acelera el juego durante unos segundos.</p>
+        <button class="primary" id="start" type="button">EMPEZAR</button>
+      </div>
+    </div>
+  </div>
+  <div class="controls">
+    <p class="hint">ESPACIO / ↑ / TOCAR PARA SALTAR<br>P PARA PAUSAR</p>
+    <button class="jump" id="jump" type="button" aria-label="Saltar">↑ SALTAR</button>
+  </div>
+  <p class="foot">Un juego sin conexión · Hecho para disfrutar en cualquier navegador</p>
+</main>
+<script>
+(() => {
+  "use strict";
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+  const overlay = document.getElementById("overlay");
+  const title = document.getElementById("title");
+  const eyebrow = document.getElementById("eyebrow");
+  const description = document.getElementById("description");
+  const details = document.getElementById("details");
+  const startButton = document.getElementById("start");
+  const bestElement = document.getElementById("best");
+  const W = 960, H = 480, ground = 377;
+  const player = { x: 135, y: ground - 84, w: 42, h: 84, vy: 0 };
+  let state = "ready", distance = 0, drinks = 0, score = 0, invincible = 0;
+  let entities = [], particles = [], nextObstacle = 0, nextDrink = 0, nextCrystal = 0;
+  let lastTime = 0, time = 0, best = 0;
+  try { best = Number(localStorage.getItem("gallego-run-best")) || 0; } catch (_) { /* Storage is optional for offline play. */ }
+  const format = n => String(Math.floor(n)).padStart(5, "0");
+  bestElement.textContent = format(best);
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const rect = (x, y, w, h, color) => { ctx.fillStyle = color; ctx.fillRect(Math.round(x), Math.round(y), w, h); };
+  const label = (text, x, y, size, color, align = "left") => {
+    ctx.fillStyle = color; ctx.font = `bold ${size}px monospace`; ctx.textAlign = align;
+    ctx.fillText(text, Math.round(x), Math.round(y));
+  };
+  function reset() {
+    distance = drinks = score = invincible = time = 0;
+    entities = []; particles = [];
+    player.y = ground - player.h; player.vy = 0;
+    nextObstacle = 680; nextDrink = 360; nextCrystal = 2100;
+    state = "playing"; overlay.hidden = true; lastTime = 0;
+  }
+  function end() {
+    state = "over";
+    if (score > best) {
+      best = score;
+      try { localStorage.setItem("gallego-run-best", String(best)); } catch (_) { /* The game works without persistent storage. */ }
+      bestElement.textContent = format(best);
+    }
+    eyebrow.textContent = "FIN DE LA CARRERA";
+    title.textContent = "¡BUENA CARRERA!";
+    description.textContent = `Puntos: ${format(score)} · Ron con cola: ${drinks}`;
+    details.textContent = "La próxima ronda siempre puede ser mejor.";
+    startButton.textContent = "VOLVER A JUGAR";
+    overlay.hidden = false;
+  }
+  function jump() {
+    if (state !== "playing") return;
+    if (player.y >= ground - player.h - 0.1) {
+      player.vy = -690;
+      for (let i = 0; i < 6; i++) particles.push({x: player.x + 12, y: ground - 3, vx: rand(-100, 20), vy: rand(-130, -40), life: .45, color: "#e9c099"});
+    }
+  }
+  function togglePause() {
+    if (state === "playing") {
+      state = "paused"; eyebrow.textContent = "UN PEQUEÑO DESCANSO"; title.textContent = "EN PAUSA";
+      description.textContent = "La playa te espera."; details.textContent = "Pulsa P o continuar para volver.";
+      startButton.textContent = "CONTINUAR"; overlay.hidden = false;
+    } else if (state === "paused") { state = "playing"; overlay.hidden = true; lastTime = 0; }
+  }
+  startButton.addEventListener("click", e => {
+    e.stopPropagation();
+    if (state === "paused") togglePause(); else reset();
+  });
+  document.getElementById("jump").addEventListener("pointerdown", e => { e.preventDefault(); jump(); });
+  canvas.addEventListener("pointerdown", e => { e.preventDefault(); jump(); });
+  document.addEventListener("keydown", e => {
+    if (["Space", "ArrowUp"].includes(e.code)) {
+      e.preventDefault();
+      if (e.repeat) return;
+      if (state === "playing") jump();
+      else if (state === "ready" || state === "over") reset();
+    } else if (e.code === "KeyP" && !e.repeat) togglePause();
+  });
+  document.addEventListener("visibilitychange", () => { if (document.hidden && state === "playing") togglePause(); });
+
+  function spawn(kind) {
+    if (kind === "rock") {
+      const tall = Math.random() < .32;
+      entities.push({kind, x: W + 30, y: ground - (tall ? 60 : 43), w: tall ? 38 : 50, h: tall ? 60 : 43});
+    } else if (kind === "drink") {
+      entities.push({kind, x: W + 30, y: ground - (Math.random() < .5 ? 66 : 145), w: 28, h: 36});
+    } else {
+      entities.push({kind, x: W + 30, y: ground - 105, w: 32, h: 42});
+    }
+  }
+  function intersects(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+  function update(dt) {
+    time += dt;
+    const baseSpeed = Math.min(500, 245 + distance * .006);
+    const speed = baseSpeed * (invincible > 0 ? 1.35 : 1);
+    distance += speed * dt;
+    score = Math.floor(distance / 10) + drinks * 100;
+    invincible = Math.max(0, invincible - dt);
+    player.vy += 1700 * dt;
+    player.y += player.vy * dt;
+    if (player.y > ground - player.h) { player.y = ground - player.h; player.vy = 0; }
+    nextObstacle -= speed * dt; nextDrink -= speed * dt; nextCrystal -= speed * dt;
+    if (nextObstacle <= 0) {
+      spawn("rock");
+      // Spacing scales with speed so every obstacle remains individually jumpable.
+      nextObstacle = speed * rand(1.25, 1.8);
+    }
+    if (nextDrink <= 0) { spawn("drink"); nextDrink = rand(500, 800); }
+    if (nextCrystal <= 0) { spawn("crystal"); nextCrystal = rand(2700, 4000); }
+    for (const e of entities) {
+      e.x -= speed * dt;
+      const hitbox = {x: player.x + 8, y: player.y + 5, w: player.w - 16, h: player.h - 7};
+      if (!e.collected && intersects(hitbox, e)) {
+        if (e.kind === "rock" && invincible <= 0) { end(); return; }
+        e.collected = true;
+        if (e.kind === "drink") { drinks++; score += 100; }
+        if (e.kind === "crystal") invincible = 7;
+        for (let i = 0; i < 8; i++) particles.push({x: e.x + e.w / 2, y: e.y + e.h / 2, vx: rand(-150, 150), vy: rand(-180, 40), life: rand(.3, .7), color: e.kind === "crystal" ? "#a4faff" : "#ffd57a"});
+      }
+    }
+    entities = entities.filter(e => !e.collected && e.x + e.w > -30);
+    for (const p of particles) { p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 300 * dt; p.life -= dt; }
+    particles = particles.filter(p => p.life > 0);
+  }
+  function mountain(offset, color, peaks, base) {
+    ctx.fillStyle = color; ctx.beginPath(); ctx.moveTo(-100, base);
+    for (let i = -1; i < 8; i++) {
+      const x = i * 210 - offset % 210;
+      ctx.lineTo(x, base); ctx.lineTo(x + 105, peaks[i + 1] || 170); ctx.lineTo(x + 210, base);
+    }
+    ctx.lineTo(W + 100, base); ctx.closePath(); ctx.fill();
+  }
+  function background() {
+    rect(0, 0, W, H, "#f5b77f");
+    rect(0, 0, W, 115, "#e89e77");
+    rect(0, 115, W, 95, "#f5bd86");
+    rect(718, 62, 70, 70, "#ffe4a8"); rect(708, 72, 90, 50, "#ffe4a8");
+    rect(105, 79, 84, 9, "#ffe4bd"); rect(120, 70, 46, 9, "#ffe4bd");
+    rect(375, 120, 96, 8, "#ffe4bd"); rect(393, 111, 54, 9, "#ffe4bd");
+    mountain(distance * .05, "#d99877", [245,220,260,215,250,195,245,225,230], 330);
+    mountain(distance * .11, "#c98267", [278,247,275,239,270,240,279,250,260], 345);
+    rect(0, 300, W, 77, "#78b2b0");
+    rect(0, 320, W, 5, "#a9d0c0"); rect(0, 347, W, 4, "#a9d0c0");
+    rect(0, ground, W, 103, "#e5ba85");
+    rect(0, ground, W, 9, "#f9d7a2"); rect(0, ground + 9, W, 8, "#c88f70");
+    for (let i = 0; i < 18; i++) {
+      const x = ((i * 97 - distance * .65) % (W + 100) + W + 100) % (W + 100) - 30;
+      rect(x, 410 + (i % 3) * 21, 14 + i % 3 * 5, 3, "#c99978");
+    }
+  }
+  function drawPlayer() {
+    const x = Math.round(player.x), y = Math.round(player.y);
+    const moving = player.y >= ground - player.h - 1;
+    const stride = moving && Math.floor(time * 9) % 2 === 0;
+    if (invincible > 0) {
+      rect(x - 9, y + 8, 60, 67, "#8deaf0");
+      rect(x - 14, y + 20, 70, 42, "#8deaf0");
+      rect(x - 6, y + 12, 54, 62, "#fff3b7");
+    }
+    // Hair, skin, sunglasses, black towel and raspberry shorts echo the photo.
+    rect(x + 10, y + 2, 24, 5, "#412a28");
+    rect(x + 7, y + 7, 30, 8, "#412a28");
+    rect(x + 8, y + 15, 29, 21, "#e9a47e");
+    rect(x + 10, y + 18, 12, 7, "#272a30"); rect(x + 25, y + 18, 12, 7, "#272a30"); rect(x + 21, y + 20, 5, 2, "#272a30");
+    rect(x + 19, y + 29, 11, 3, "#fff1dc"); rect(x + 13, y + 34, 19, 3, "#71423a");
+    rect(x + 11, y + 37, 24, 22, "#e9a47e");
+    rect(x + 6, y + 37, 9, 21, "#292326"); rect(x + 4, y + 42, 6, 18, "#292326");
+    rect(x + 33, y + 39, 7, 19, "#d98d6d"); rect(x + 2, y + 43, 6, 17, "#e9a47e");
+    rect(x + 10, y + 57, 27, 15, "#b32959"); rect(x + 10, y + 57, 27, 3, "#831f4c");
+    rect(x + 12, y + 72, 9, stride ? 8 : 10, "#e9a47e");
+    rect(x + 26, y + 72, 9, stride ? 10 : 8, "#e9a47e");
+    rect(x + (stride ? 9 : 12), y + (stride ? 80 : 82), 13, 4, "#56383a");
+    rect(x + (stride ? 26 : 29), y + (stride ? 82 : 80), 13, 4, "#56383a");
+  }
+  function drawEntity(e) {
+    const x = e.x, y = e.y;
+    if (e.kind === "rock") {
+      rect(x + 4, y + 12, e.w - 8, e.h - 12, "#725454");
+      rect(x + 10, y + 4, e.w - 20, e.h - 4, "#8c6860");
+      rect(x + 16, y, e.w - 30, e.h, "#a77a68");
+      rect(x + 10, y + 16, 9, 5, "#c5987d"); rect(x + e.w - 17, y + 28, 8, 5, "#674d50");
+    } else if (e.kind === "drink") {
+      rect(x + 5, y + 3, 18, 33, "#ffead0"); rect(x + 8, y + 9, 12, 24, "#82443b");
+      rect(x + 9, y + 5, 10, 5, "#fff6dc"); rect(x + 18, y - 3, 3, 13, "#e85e62");
+      rect(x + 2, y + 11, 4, 17, "#fff0d6"); rect(x + 23, y + 11, 4, 17, "#fff0d6");
+    } else {
+      rect(x + 10, y, 12, 5, "#e7ffff"); rect(x + 5, y + 5, 22, 7, "#b0ffff");
+      rect(x, y + 12, 32, 13, "#74e1ee"); rect(x + 5, y + 25, 22, 8, "#52bbd9");
+      rect(x + 10, y + 33, 12, 5, "#a5faff"); rect(x + 10, y + 7, 5, 17, "#efffff");
+    }
+  }
+  function draw() {
+    background();
+    for (const e of entities) drawEntity(e);
+    drawPlayer();
+    for (const p of particles) rect(p.x, p.y, 5, 5, p.color);
+    rect(16, 16, 251, 57, "#332b37"); rect(19, 19, 245, 51, "#51404a");
+    label("PUNTOS", 31, 37, 11, "#f7c993"); label(format(score), 31, 59, 20, "#fff4d8");
+    label("RON + COLA", 151, 37, 11, "#f7c993"); label("× " + drinks, 151, 59, 20, "#fff4d8");
+    if (invincible > 0) {
+      const width = Math.round(160 * invincible / 7);
+      rect(W - 211, 16, 195, 57, "#332b37"); label("¡IMBATIBLE!", W - 198, 37, 13, "#b0ffff");
+      rect(W - 198, 47, 160, 9, "#607078"); rect(W - 198, 47, width, 9, "#89f4ff");
+    }
+  }
+  function frame(timestamp) {
+    if (!lastTime) lastTime = timestamp;
+    const dt = Math.min((timestamp - lastTime) / 1000, .035);
+    lastTime = timestamp;
+    if (state === "playing") update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
